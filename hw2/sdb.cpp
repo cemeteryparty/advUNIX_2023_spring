@@ -39,15 +39,15 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: ./sdb ELF_FILE\n");
         return 0;
     }
-    if((child = fork()) < 0) { errquit("fork"); }
 
-    if (child == 0) { // child
+    if((child = fork()) < 0) { errquit("fork"); }
+    if (child == 0) {
         if(ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) { errquit("TRACEME"); }
         if (execvp(argv[1], argv + 1) < 0) { errquit("execvp"); }
-    }
+    } /* child: TRACEME */
     else {
         int wait_status;
-        struct user_regs_struct regs; // saved_regs, 
+        struct user_regs_struct regs;
 
         if(waitpid(child, &wait_status, 0) < 0) errquit("waitpid");
         assert(WIFSTOPPED(wait_status));
@@ -66,6 +66,7 @@ int main(int argc, char *argv[]) {
             else { errquit("## cannot load memory mappings.\n"); }
         } /* load_maps */
 
+        size_t text_sz = 0;
         range_t text_section;
         {
             char elf_filename[32];
@@ -74,6 +75,7 @@ int main(int argc, char *argv[]) {
             vector<elf_parser::section_t> sections = ep_obj.get_sections();
             for (elf_parser::section_t &sec: sections) {
                 if (sec.section_name == ".text") {
+                    text_sz = sec.section_size;
                     text_section.begin = text_section.end = sec.section_addr;
                     text_section.end += sec.section_size;
                 }
@@ -81,64 +83,88 @@ int main(int argc, char *argv[]) {
             fprintf(fp, ".text: 0x%lx~0x%lx\n", text_section.begin, text_section.end);
         } /* elf parse */
 
+
+        printf("elf-parser: 0x%lx\n", text_section.begin);
+
+        size_t ci = 0, count;
+        map<uint64_t, instruction_t> ins_mapping;
+        map<uint64_t, instruction_t>::iterator mi;
         if (WIFSTOPPED(wait_status)) {
             if (ptrace(PTRACE_GETREGS, child, 0, &regs) != 0) { errquit("GETREGS"); }
             printf("** program '%s' loaded. entry point 0x%llx\n", argv[1], regs.rip);
-        }
+
+            /* use map<address, instruction> to mem text section */
+            uint64_t entry_ptr = text_section.begin;
+            unsigned char *text_dat = (unsigned char *)malloc((text_sz + 8) * sizeof(unsigned char));
+            while (entry_ptr < text_section.end) {
+                int64_t peek = ptrace(PTRACE_PEEKTEXT, child, entry_ptr, 0);
+                memcpy(text_dat + ci, &peek, 8);
+                entry_ptr += 8; ci += 8;
+            }
+            count = cs_disasm(handle, text_dat, text_sz + 8, text_section.begin, 0, &insn);
+            if (count <= 0) { errquit("failed to run cs_disasm()"); }
+            for (ci = 0; ci < count; ci++) {
+                if (insn[ci].address >= text_section.end) { break; }
+                char bytes[64] = "";
+                for (ushort bi = 0; bi < insn[ci].size; bi++) {
+                    snprintf(&bytes[bi * 3], 4, "%2.2x ", insn[ci].bytes[bi]);
+                }
+                instruction_t ins_;
+                ins_.bytes = string(bytes);
+                ins_.opr = string(insn[ci].mnemonic);
+                ins_.opnd = string(insn[ci].op_str);
+                ins_mapping[insn[ci].address] = ins_;
+            }
+            cs_free(insn, count);
+            free(text_dat);
+            for (mi = ins_mapping.begin(); mi != ins_mapping.end(); mi++) {
+                fprintf(fp, "\t%lx: ", mi->first);
+                fprintf(fp, "%-32s\t%-10s%s\n",
+                    mi->second.bytes.c_str(),
+                    mi->second.opr.c_str(),
+                    mi->second.opnd.c_str()
+                );
+            }
+        } /* initialize debugger */
 
         string input, command;
         uint64_t address_arg;
         while (WIFSTOPPED(wait_status) && command != "quit") {
-
-            /* default beh: print 5 instr */
+            /* write 5 instr to stdout */
             if (!ptrace(PTRACE_GETREGS, child, 0, &regs)) {
-                size_t ci, count;
-                unsigned char bytes40[40] = {0};
-                for (ci = 0; ci < 5; ci++) {
-                    uint64_t peek = ptrace(PTRACE_PEEKTEXT, child, regs.rip + 8 * ci, 0);
-                    memcpy(bytes40 + 8 * ci, &peek, 8);
-                    
-                } /* load 40 bytes from rip, can be extend */
-
                 ci = 0;
-                count = cs_disasm(handle, bytes40, sizeof(bytes40), regs.rip, 0, &insn);
-                if (count > 0) {
-                    while (ci < 5) {
-                        char bytes[64] = "";
-                        if (insn[ci].address >= text_section.end) {
-                            printf("** the address is out of the range of the text section.\n");
-                            break;
-                        }
-                        printf("\t%lx: ", insn[ci].address);
-                        for (ushort bi = 0; bi < insn[ci].size; bi++) {
-                            snprintf(&bytes[bi * 3], 4, "%2.2x ", insn[ci].bytes[bi]);
-                        }
-                        printf("%-32s\t%-10s%s\n", bytes, insn[ci].mnemonic, insn[ci].op_str);
-                        ci++;
-                    }
-                    cs_free(insn, count);
+                mi = ins_mapping.find(regs.rip);
+                while (mi != ins_mapping.end() && ci < 5) {
+                    printf("\t%lx: ", mi->first);
+                    printf("%-32s\t%-10s%s\n",
+                        mi->second.bytes.c_str(),
+                        mi->second.opr.c_str(),
+                        mi->second.opnd.c_str()
+                    );
+                    ci++; mi++;
                 }
-                else { errquit("failed to run cs_disasm()"); }
+                if (ci < 5) { printf("** the address is out of the range of the text section.\n"); }
             }
             else { errquit("GETREGS"); }
             
             bool looping;
             do {
                 looping = false;
-                printf("(sdb) "); getline(cin, input);
-                size_t pos = input.find(' ');
-                if (pos != string::npos) {
-                    command = input.substr(0, pos);
-                    input = input.substr(pos + 1);
-                    if (input.find(' ') != string::npos) { command = "invalid"; }
-                    else {
-                        try { address_arg = stoul(input, nullptr, 16); }
-                        catch (exception &e) { command = "invalid"; }
+                printf("\n(sdb) "); getline(cin, input);
+                {
+                    size_t pos = input.find(' ');
+                    if (pos != string::npos) {
+                        command = input.substr(0, pos);
+                        input = input.substr(pos + 1);
+                        if (input.find(' ') != string::npos) { command = "invalid"; }
+                        else {
+                            try { address_arg = stoul(input, nullptr, 16); }
+                            catch (exception &e) { command = "invalid"; }
+                        }
                     }
-                }
-                else if (input.length()) { command = input; input.clear(); }
-                fprintf(fp, "<%s> <%ld>\n", command.c_str(), address_arg);
-
+                    else if (input.length()) { command = input; input.clear(); }
+                    fprintf(fp, "<%s> <%ld>\n", command.c_str(), address_arg);
+                } /* parse user input */
 
                 if (command == "cont" && input.empty()) {
                     ptrace(PTRACE_CONT, child, 0, 0);

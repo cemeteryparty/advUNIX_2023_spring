@@ -17,6 +17,12 @@ typedef struct map_entry_s {
     std::string name;
 }   map_entry_t;
 
+typedef struct instruction_s {
+    std::string bytes;
+    std::string opr;
+    std::string opnd;
+} instruction_t;
+
 bool operator<(range_t r1, range_t r2);
 int load_maps(pid_t pid, std::map<range_t, map_entry_t>& loaded);
 
