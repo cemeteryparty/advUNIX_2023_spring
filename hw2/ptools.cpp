@@ -46,3 +46,12 @@ int load_maps(pid_t pid, map<range_t, map_entry_t>& loaded) {
     }
     return (int) loaded.size();
 }
+
+void dump_code(uint64_t addr, uint64_t code) {
+    fprintf(stderr, "## %lx: code = %02x %02x %02x %02x %02x %02x %02x %02x\n", addr,
+        ((unsigned char *) (&code))[0], ((unsigned char *) (&code))[1],
+        ((unsigned char *) (&code))[2], ((unsigned char *) (&code))[3],
+        ((unsigned char *) (&code))[4], ((unsigned char *) (&code))[5],
+        ((unsigned char *) (&code))[6], ((unsigned char *) (&code))[7]
+    );
+}

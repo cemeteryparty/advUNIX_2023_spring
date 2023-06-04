@@ -26,4 +26,6 @@ typedef struct instruction_s {
 bool operator<(range_t r1, range_t r2);
 int load_maps(pid_t pid, std::map<range_t, map_entry_t>& loaded);
 
+void dump_code(uint64_t addr, uint64_t code);
+
 #endif /* __PTOOLS_H__ */
