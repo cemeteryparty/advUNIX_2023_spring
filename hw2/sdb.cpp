@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
         string input, command = "init";
         uint64_t address_arg;
         map<uint64_t, uint64_t> bk_map; // addr: 8bytes code
-        map<uint64_t, uint64_t>::iterator bit, bjt;
+        map<uint64_t, uint64_t>::iterator bit;
 
         char mem_fname[32];
         snprintf(mem_fname, 32, "/proc/%d/mem", child);
@@ -242,14 +242,7 @@ int main(int argc, char *argv[]) {
                     peek = ptrace(PTRACE_PEEKTEXT, child, address_arg, 0);
                     bk_map[address_arg] = peek;
                     if (ptrace(PTRACE_POKETEXT, child, address_arg, (peek & CC_MASK) | 0xcc) != 0) { errquit("ptrace(POKETEXT)"); }
-                    
 
-                    // uint64_t entry_ptr = text_section.begin;
-                    // while (entry_ptr < text_section.end) {
-                    //     peek = ptrace(PTRACE_PEEKTEXT, child, entry_ptr, 0); // int64_t
-                    //     dump_code(entry_ptr, peek);
-                    //     entry_ptr += 8;
-                    // }
                     printf("** set a breakpoint at 0x%lx\n", address_arg);
                     looping = true;
                 } /* break */
