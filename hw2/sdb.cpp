@@ -131,8 +131,8 @@ int main(int argc, char *argv[]) {
 
         string input, command = "init";
         uint64_t address_arg;
-        unordered_map<uint64_t, uint64_t> bk_map; // addr: 8bytes code
-        unordered_map<uint64_t, uint64_t>::iterator bit;
+        map<uint64_t, uint64_t> bk_map; // addr: 8bytes code
+        map<uint64_t, uint64_t>::iterator bit, bjt;
 
         char mem_fname[32];
         snprintf(mem_fname, 32, "/proc/%d/mem", child);
@@ -149,10 +149,15 @@ int main(int argc, char *argv[]) {
             // printf("rip: 0x%llx\n", regs.rip);
 
             uint64_t off = command == "cont"? 1: 0;
-            if (bk_map.find(regs.rip - off) != bk_map.end()) {
+            bit = bk_map.find(regs.rip - off);
+            if (bit != bk_map.end()) {
                 regs.rip = regs.rip - off;
-                printf("** hit a breakpoint at 0x%llx\n", regs.rip);
-                if (ptrace(PTRACE_POKETEXT, child, regs.rip, bk_map[regs.rip]) != 0) { errquit("ptrace(POKETEXT)"); }
+                if (command != "timetravel") {
+                    printf("** hit a breakpoint at 0x%llx\n", regs.rip);
+                }
+                peek = ptrace(PTRACE_PEEKTEXT, child, regs.rip, 0);
+                if (ptrace(PTRACE_POKETEXT, child, regs.rip, ((bk_map[regs.rip] & 0xff) | (peek & CC_MASK))) != 0) { errquit("ptrace(POKETEXT)"); }
+                // if (ptrace(PTRACE_POKETEXT, child, regs.rip, bk_map[regs.rip]) != 0) { errquit("ptrace(POKETEXT)"); }
                 if (ptrace(PTRACE_SETREGS, child, 0, &regs) != 0) { errquit("ptrace(SETREGS)"); }
             } /* restore breakpoint */
 
@@ -205,10 +210,12 @@ int main(int argc, char *argv[]) {
                     int mem_fd;
                     if ((mem_fd = open(mem_fname, O_RDWR)) < 0) { errquit("timetravel: open mem file"); }
                     for (ait = anchor_snap.begin(); ait != anchor_snap.end(); ait++) {
+                        printf("%llx~%llx\n", r.begin, r.end);
                         r = ait->first;
                         if (pwrite(mem_fd, ait->second, r.end - r.begin, r.begin) < 0) { errquit("timetravel: pwrite"); }
                     }
                     if (ptrace(PTRACE_SETREGS, child, 0, &anchor_regs) != 0) { errquit("timetravel: SETREGS"); }
+                    close(mem_fd);
                 }
                 else if (command == "anchor" && input.empty()) {
                     if (ptrace(PTRACE_GETREGS, child, 0, &anchor_regs) != 0) { errquit("GETREGS"); }
@@ -244,6 +251,7 @@ int main(int argc, char *argv[]) {
                     //     entry_ptr += 8;
                     // }
                     printf("** set a breakpoint at 0x%lx\n", address_arg);
+                    looping = true;
                 } /* break */
                 else { fprintf(stderr, "Q_Q: unknown command\n"); looping = true; }
             } while (looping);
